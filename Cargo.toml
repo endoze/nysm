@@ -1,6 +1,6 @@
 [package]
 name = "nysm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Manage secrets from Secrets Providers."
 authors = ["Endoze <endoze@endozemedia.com>"]
@@ -15,19 +15,20 @@ rust-version = "1.70.0"
 name = "nysm"
 
 [dependencies]
-aws-config = "0.56.1"
-aws-sdk-secretsmanager = "0.32.0"
-tokio = { version = "1", features = ["full"] }
-bat = "0.23.0"
+anyhow = "1"
+async-trait = "0.1"
+aws-config = "0.56"
+aws-sdk-secretsmanager = "0.34"
+aws-types = "0.56"
+bat = "0.24"
+clap = { version = "4.4", features = ["derive"]}
 serde = "1"
 serde_json = "1"
 serde_yaml = "0.9"
-clap = { version = "4.4.3", features = ["derive"]}
-tabled = "0.14.0"
-anyhow = "1"
+tabled = "0.14"
 tempfile = "3"
-thiserror = "1.0.48"
-async-trait = "0.1.73"
+thiserror = "1.0"
+tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 lazy_static = { version = "1.4.0" }

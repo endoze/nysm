@@ -4,13 +4,14 @@ use crate::client::{
   GetSecretValueResult, ListSecretsResult, QuerySecrets, Secret, UpdateSecretValueResult,
 };
 use crate::error::NysmError;
+
 use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_secretsmanager::config::Region;
 use aws_sdk_secretsmanager::operation::{
   get_secret_value::GetSecretValueOutput, list_secrets::ListSecretsOutput,
   update_secret::UpdateSecretOutput,
 };
+use aws_types::region::Region;
 
 impl From<ListSecretsOutput> for ListSecretsResult {
   fn from(value: ListSecretsOutput) -> Self {
