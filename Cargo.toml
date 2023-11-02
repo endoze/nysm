@@ -1,6 +1,6 @@
 [package]
 name = "nysm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Manage secrets from Secrets Providers."
 authors = ["Endoze <endoze@endozemedia.com>"]
