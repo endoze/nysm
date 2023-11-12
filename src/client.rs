@@ -97,6 +97,7 @@ impl<'a> Iterator for GetSecretsResultIter<'a> {
 /// It provides methods to retrieve a list of stored secrets, retrieve a
 /// specific secret's value, and to update a specific secret's value.
 #[async_trait]
+#[cfg(not(tarpaulin_include))]
 pub trait QuerySecrets {
   /// Requests a list of secrets from the secret provider.
   ///
