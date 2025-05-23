@@ -1,0 +1,12 @@
+application.yml: |-
+  banana: false 
+  apple: true
+  flasdjfljasdlfjalsd: alsdkjflasjdflajdslf
+database.yml: |-
+  banana: false
+  apple: true
+  flasdjfljasdlfjalsd: alsdkjflasjdflajdslf
+settings.yml: |-
+  banana: false
+  apple: true
+  flasdjfljasdlfjalsd: alsdkjflasjdflajdslf

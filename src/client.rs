@@ -50,7 +50,7 @@ impl ListSecretsResult {
   /// Returns a tableized string output of [ListSecretsResult]
   pub fn table_display(&self) -> String {
     let mut builder = tabled::builder::Builder::default();
-    builder.set_header(["Name", "Description", "URI"]);
+    builder.push_record(["Name", "Description", "URI"]);
 
     self.iter().for_each(|secret| {
       builder.push_record([

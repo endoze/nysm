@@ -15,9 +15,7 @@ use aws_types::region::Region;
 
 impl From<ListSecretsOutput> for ListSecretsResult {
   fn from(value: ListSecretsOutput) -> Self {
-    let Some(list) = value.secret_list() else {
-      return ListSecretsResult::default();
-    };
+    let list = value.secret_list();
 
     let entries = list
       .iter()
@@ -80,7 +78,10 @@ impl AwsClient {
     let region = region.map(Region::new);
     let region_provider = RegionProviderChain::first_try(region).or_default_provider();
 
-    let config = aws_config::from_env().region(region_provider).load().await;
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+      .region(region_provider)
+      .load()
+      .await;
     let client = aws_sdk_secretsmanager::client::Client::new(&config);
 
     Self { client }

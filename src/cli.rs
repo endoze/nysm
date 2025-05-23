@@ -160,6 +160,18 @@ async fn edit(client: impl QuerySecrets, args: &Edit) -> Result<(), NysmError> {
   Ok(())
 }
 
+fn strip_trailing_whitespace_from_block_scalars(content: &str) -> String {
+  if content.contains(": |") {
+    content
+      .lines()
+      .map(|line| line.trim_end())
+      .collect::<Vec<_>>()
+      .join("\n")
+  } else {
+    content.to_string()
+  }
+}
+
 fn reformat_data(
   content: &str,
   source_format: &DataFormat,
@@ -171,19 +183,22 @@ fn reformat_data(
 
       match destination_format {
         DataFormat::Json => serde_json::to_string_pretty(&json_value)?,
-        DataFormat::Yaml => serde_yaml::to_string(&json_value)?,
+        DataFormat::Yaml => serde_yml::to_string(&json_value)?,
         DataFormat::Text => String::from(content),
       }
     }
-    DataFormat::Yaml => {
-      let yaml_value: serde_yaml::Value = serde_yaml::from_str(content)?;
-
-      match destination_format {
-        DataFormat::Json => serde_json::to_string_pretty(&yaml_value)?,
-        DataFormat::Yaml => serde_yaml::to_string(&yaml_value)?,
-        DataFormat::Text => String::from(content),
+    DataFormat::Yaml => match destination_format {
+      DataFormat::Yaml => {
+        serde_yml::from_str::<serde_yml::Value>(content)?;
+        String::from(content)
       }
-    }
+      DataFormat::Json => {
+        let cleaned_content = strip_trailing_whitespace_from_block_scalars(content);
+        let yaml_value: serde_yml::Value = serde_yml::from_str(&cleaned_content)?;
+        serde_json::to_string_pretty(&yaml_value)?
+      }
+      DataFormat::Text => String::from(content),
+    },
     DataFormat::Text => String::from(content),
   })
 }
@@ -316,8 +331,8 @@ mod tests {
       let old_v = env::var(k);
       old_kvs.push((k, old_v));
       match v {
-        None => env::remove_var(k),
-        Some(v) => env::set_var(k, v),
+        None => unsafe { env::remove_var(k) },
+        Some(v) => unsafe { env::set_var(k, v) },
       }
     }
 
@@ -339,9 +354,9 @@ mod tests {
 
   fn reset_env(k: &str, old: Result<String, VarError>) {
     if let Ok(v) = old {
-      env::set_var(k, v);
+      unsafe { env::set_var(k, v) };
     } else {
-      env::remove_var(k);
+      unsafe { env::remove_var(k) };
     }
   }
 
@@ -441,6 +456,18 @@ banana: true
     }
 
     #[test]
+    fn from_yaml_with_trailing_whitespace_to_json() -> TestResult {
+      let yaml_string = "application.yml: |-\n  banana: false \n  apple: true\n  flasdjfljasdlfjalsd: alsdkjflasjdflajdslf\n";
+
+      let result = reformat_data(yaml_string, &DataFormat::Yaml, &DataFormat::Json)?;
+
+      assert!(!result.contains("false \\n"));
+      assert!(result.contains("false\\n"));
+
+      Ok(())
+    }
+
+    #[test]
     fn from_text() -> TestResult {
       let text = "This is a plain string with no data structure.";
       let expected = "This is a plain string with no data structure.";
@@ -458,6 +485,21 @@ banana: true
     assert_eq!(format!("{}", DataFormat::Json), "Json");
     assert_eq!(format!("{}", DataFormat::Yaml), "Yaml");
     assert_eq!(format!("{}", DataFormat::Text), "Text");
+
+    Ok(())
+  }
+
+  #[test]
+  fn test_yaml_with_mixed_whitespace_fixture() -> TestResult {
+    let fixture_path = "tests/fixtures/mixed_whitespace.yml";
+    let problematic_yaml =
+      std::fs::read_to_string(fixture_path).expect("Failed to read fixture file");
+
+    let result = reformat_data(&problematic_yaml, &DataFormat::Yaml, &DataFormat::Json)?;
+
+    assert!(result.contains("application.yml"));
+    assert!(result.contains("banana: false"));
+    assert!(!result.contains("false \\n"));
 
     Ok(())
   }
@@ -732,7 +774,7 @@ banana: true
             assert_eq!(
               result,
               Err(NysmError::SerdeYaml(
-                serde_yaml::from_str::<String>("::::").unwrap_err()
+                serde_yml::from_str::<String>("::::").unwrap_err()
               ))
             );
           }),

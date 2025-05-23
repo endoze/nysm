@@ -10,7 +10,7 @@ pub enum NysmError {
 
   /// Error occurs when attempting to parse data as Text fails.
   #[error("Unable to parse data as yaml")]
-  SerdeYaml(#[from] serde_yaml::Error),
+  SerdeYaml(#[from] serde_yml::Error),
 
   /// Error occurs when pretty printing the contents of a secret fails.
   #[error("Unable to pretty print data")]
@@ -54,7 +54,7 @@ mod tests {
 
   #[test]
   fn test_serde_yaml_error() {
-    let error = NysmError::SerdeYaml(serde_yaml::Error::custom("custom error"));
+    let error = NysmError::SerdeYaml(serde_yml::Error::custom("custom error"));
     assert_eq!(error.to_string(), "Unable to parse data as yaml");
   }
 
@@ -104,7 +104,7 @@ mod tests {
   fn test_partial_eq() {
     let error1 = NysmError::SerdeJson(serde_json::Error::custom("custom error"));
     let error2 = NysmError::SerdeJson(serde_json::Error::custom("custom error"));
-    let error3 = NysmError::SerdeYaml(serde_yaml::Error::custom("different error"));
+    let error3 = NysmError::SerdeYaml(serde_yml::Error::custom("different error"));
 
     assert_eq!(error1, error2);
     assert_ne!(error1, error3);
