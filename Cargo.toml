@@ -9,7 +9,7 @@ readme = "README.md"
 repository = "https://github.com/Endoze/nysm"
 documentation = "https://docs.rs/nysm"
 homepage = "https://github.com/Endoze/nysm"
-rust-version = "1.87.0"
+rust-version = "1.86.0"
 
 [lib]
 name = "nysm"
