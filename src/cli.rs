@@ -32,6 +32,8 @@ pub enum Commands {
   Show(Show),
   /// Create a new secret
   Create(Create),
+  /// Delete a secret
+  Delete(Delete),
 }
 
 /// Retrieve a list of secrets
@@ -95,6 +97,13 @@ pub struct Create {
   pub edit_format: DataFormat,
 }
 
+/// Delete a secret
+#[derive(Args, PartialEq, Debug)]
+pub struct Delete {
+  /// ID of the secret to delete
+  pub secret_id: String,
+}
+
 /// Enum to describe the different data formats that can be used with Secrets
 #[derive(Clone, Debug, Deserialize, Serialize, ValueEnum, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -135,6 +144,7 @@ impl ArgumentParser {
       Commands::Edit(args) => edit(client, args).await,
       Commands::Show(args) => show(client, args).await,
       Commands::Create(args) => create(client, args).await,
+      Commands::Delete(args) => delete(client, args).await,
     };
 
     if let Err(error) = result {
@@ -206,6 +216,12 @@ async fn create(client: impl QuerySecrets, args: &Create) -> Result<(), NysmErro
         .await?;
     }
   }
+
+  Ok(())
+}
+
+async fn delete(client: impl QuerySecrets, args: &Delete) -> Result<(), NysmError> {
+  let _ = client.delete_secret(args.secret_id.clone()).await?;
 
   Ok(())
 }
@@ -654,13 +670,29 @@ banana: true
 
       Ok(())
     }
+
+    #[test]
+    fn sets_delete_subcommand() -> TestResult {
+      let args = "nysm -r us-west-2 delete test-secret".split_whitespace();
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert_eq!(
+        arg_parser.command,
+        Commands::Delete(Delete {
+          secret_id: "test-secret".into(),
+        })
+      );
+
+      Ok(())
+    }
   }
 
   #[allow(clippy::field_reassign_with_default)]
   mod client {
     use super::*;
     use crate::client::{
-      CreateSecretResult, GetSecretValueResult, ListSecretsResult, Secret, UpdateSecretValueResult,
+      CreateSecretResult, DeleteSecretResult, GetSecretValueResult, ListSecretsResult, Secret,
+      UpdateSecretValueResult,
     };
     use async_trait::async_trait;
 
@@ -669,8 +701,10 @@ banana: true
       fails_on_get_secret_value: bool,
       fails_on_update_secret_value: bool,
       fails_on_create_secret: bool,
+      fails_on_delete_secret: bool,
       on_create_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
       on_update_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
+      on_delete_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
     }
 
     impl Default for TestClient {
@@ -680,8 +714,10 @@ banana: true
           fails_on_get_secret_value: false,
           fails_on_update_secret_value: false,
           fails_on_create_secret: false,
+          fails_on_delete_secret: false,
           on_create_secret: None,
           on_update_secret: None,
+          on_delete_secret: None,
         }
       }
     }
@@ -757,6 +793,22 @@ banana: true
           name: Some("new-test-secret".into()),
           uri: Some("some-new-unique-id".into()),
           version_id: Some("new-secret-version-id".into()),
+        })
+      }
+
+      async fn delete_secret(&self, secret_id: String) -> Result<DeleteSecretResult, NysmError> {
+        if self.fails_on_delete_secret {
+          return Err(NysmError::AwsSecretValueDelete);
+        }
+
+        if let Some(callback) = &self.on_delete_secret {
+          callback(&secret_id);
+        }
+
+        Ok(DeleteSecretResult {
+          name: Some("deleted-secret".into()),
+          uri: Some("some-deleted-unique-id".into()),
+          deletion_date: Some("2024-01-01".into()),
         })
       }
     }
@@ -1163,6 +1215,66 @@ banana: true
           }),
         )
         .await;
+
+        Ok(())
+      }
+    }
+
+    mod delete_output {
+      use super::*;
+
+      #[tokio::test]
+      async fn error_when_api_delete_call_fails() -> TestResult {
+        let mut client = TestClient::default();
+        client.fails_on_delete_secret = true;
+
+        let result = delete(
+          client,
+          &Delete {
+            secret_id: "fake".into(),
+          },
+        )
+        .await;
+
+        assert_eq!(result, Err(NysmError::AwsSecretValueDelete));
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn ok_when_api_delete_call_succeeds() -> TestResult {
+        let client = TestClient::default();
+
+        let result = delete(
+          client,
+          &Delete {
+            secret_id: "test-secret".into(),
+          },
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn calls_callback_with_secret_id() -> TestResult {
+        let mut client = TestClient::default();
+
+        client.on_delete_secret = Some(Box::new(|secret_id| {
+          assert_eq!(secret_id, "test-secret");
+        }));
+
+        let result = delete(
+          client,
+          &Delete {
+            secret_id: "test-secret".into(),
+          },
+        )
+        .await;
+
+        assert!(result.is_ok());
 
         Ok(())
       }

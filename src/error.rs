@@ -36,6 +36,10 @@ pub enum NysmError {
   /// Error occurs when creating a secret fails
   #[error("Unable to create secret")]
   AwsSecretValueCreate,
+
+  /// Error occurs when deleting a secret fails
+  #[error("Unable to delete secret")]
+  AwsSecretValueDelete,
 }
 
 impl PartialEq for NysmError {
@@ -108,6 +112,12 @@ mod tests {
   fn test_aws_secret_value_create_error() {
     let error = NysmError::AwsSecretValueCreate;
     assert_eq!(error.to_string(), "Unable to create secret");
+  }
+
+  #[test]
+  fn test_aws_secret_value_delete_error() {
+    let error = NysmError::AwsSecretValueDelete;
+    assert_eq!(error.to_string(), "Unable to delete secret");
   }
 
   #[test]
