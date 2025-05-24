@@ -1,15 +1,16 @@
 #![deny(missing_docs)]
 #![cfg(not(tarpaulin_include))]
 use crate::client::{
-  GetSecretValueResult, ListSecretsResult, QuerySecrets, Secret, UpdateSecretValueResult,
+  CreateSecretResult, GetSecretValueResult, ListSecretsResult, QuerySecrets, Secret,
+  UpdateSecretValueResult,
 };
 use crate::error::NysmError;
 
 use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_secretsmanager::operation::{
-  get_secret_value::GetSecretValueOutput, list_secrets::ListSecretsOutput,
-  update_secret::UpdateSecretOutput,
+  create_secret::CreateSecretOutput, get_secret_value::GetSecretValueOutput,
+  list_secrets::ListSecretsOutput, update_secret::UpdateSecretOutput,
 };
 use aws_types::region::Region;
 
@@ -44,6 +45,16 @@ impl From<GetSecretValueOutput> for GetSecretValueResult {
 
 impl From<UpdateSecretOutput> for UpdateSecretValueResult {
   fn from(value: UpdateSecretOutput) -> Self {
+    Self {
+      name: value.name().map(String::from),
+      uri: value.arn().map(String::from),
+      version_id: value.version_id().map(String::from),
+    }
+  }
+}
+
+impl From<CreateSecretOutput> for CreateSecretResult {
+  fn from(value: CreateSecretOutput) -> Self {
     Self {
       name: value.name().map(String::from),
       uri: value.arn().map(String::from),
@@ -146,6 +157,28 @@ impl QuerySecrets for AwsClient {
     {
       Ok(secret) => Ok(secret.into()),
       Err(_) => Err(NysmError::AwsSecretValueUpdate),
+    }
+  }
+
+  async fn create_secret(
+    &self,
+    secret_id: String,
+    secret_value: String,
+    description: Option<String>,
+  ) -> Result<CreateSecretResult, NysmError> {
+    let mut request = self
+      .client
+      .create_secret()
+      .name(secret_id)
+      .secret_string(secret_value);
+
+    if let Some(desc) = description {
+      request = request.description(desc);
+    }
+
+    match request.send().await {
+      Ok(secret) => Ok(secret.into()),
+      Err(_) => Err(NysmError::AwsSecretValueCreate),
     }
   }
 }

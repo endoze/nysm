@@ -33,6 +33,16 @@ pub struct UpdateSecretValueResult {
   pub version_id: Option<String>,
 }
 
+/// Represents a response from a secret provider after creating a new secret.
+pub struct CreateSecretResult {
+  /// Name of secret
+  pub name: Option<String>,
+  /// Uniform resource locator of secret
+  pub uri: Option<String>,
+  /// Version of secret after create operation
+  pub version_id: Option<String>,
+}
+
 /// Represents a response from a secret provider that wraps around
 /// a list of secrets.
 #[derive(Default)]
@@ -127,4 +137,20 @@ pub trait QuerySecrets {
     secret_id: String,
     secret_value: String,
   ) -> Result<UpdateSecretValueResult, NysmError>;
+
+  /// Creates a new secret with the specified value and optional description.
+  ///
+  /// # Arguments
+  /// * `secret_id` - String identifier for the new secret
+  /// * `secret_value` - String contents to use as the secret value
+  /// * `description` - Optional description for the secret
+  ///
+  /// # Returns
+  /// Returns a result containing either the [CreateSecretResult] struct or an [NysmError].
+  async fn create_secret(
+    &self,
+    secret_id: String,
+    secret_value: String,
+    description: Option<String>,
+  ) -> Result<CreateSecretResult, NysmError>;
 }

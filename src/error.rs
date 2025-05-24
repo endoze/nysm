@@ -32,6 +32,10 @@ pub enum NysmError {
   /// Error occurs when updating a secret's string value fails
   #[error("Unable to update secret value")]
   AwsSecretValueUpdate,
+
+  /// Error occurs when creating a secret fails
+  #[error("Unable to create secret")]
+  AwsSecretValueCreate,
 }
 
 impl PartialEq for NysmError {
@@ -98,6 +102,12 @@ mod tests {
   fn test_aws_secret_value_update_error() {
     let error = NysmError::AwsSecretValueUpdate;
     assert_eq!(error.to_string(), "Unable to update secret value");
+  }
+
+  #[test]
+  fn test_aws_secret_value_create_error() {
+    let error = NysmError::AwsSecretValueCreate;
+    assert_eq!(error.to_string(), "Unable to create secret");
   }
 
   #[test]

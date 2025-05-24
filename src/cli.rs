@@ -30,6 +30,8 @@ pub enum Commands {
   Edit(Edit),
   /// Show the value of a specific secret
   Show(Show),
+  /// Create a new secret
+  Create(Create),
 }
 
 /// Retrieve a list of secrets
@@ -72,6 +74,27 @@ pub struct Show {
   pub secret_format: DataFormat,
 }
 
+/// Create a new secret
+#[derive(Args, PartialEq, Debug)]
+pub struct Create {
+  /// ID of the secret to create
+  pub secret_id: String,
+  /// Description of the secret
+  #[clap(short = 'd', long = "description")]
+  pub description: Option<String>,
+  /// Format of the secret as stored by the provider
+  #[clap(
+    value_enum,
+    short = 'f',
+    long = "secret-format",
+    default_value = "json"
+  )]
+  pub secret_format: DataFormat,
+  /// Format to edit the secret in
+  #[clap(value_enum, short = 'e', long = "edit-format", default_value = "yaml")]
+  pub edit_format: DataFormat,
+}
+
 /// Enum to describe the different data formats that can be used with Secrets
 #[derive(Clone, Debug, Deserialize, Serialize, ValueEnum, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -111,6 +134,7 @@ impl ArgumentParser {
       }
       Commands::Edit(args) => edit(client, args).await,
       Commands::Show(args) => show(client, args).await,
+      Commands::Create(args) => create(client, args).await,
     };
 
     if let Err(error) = result {
@@ -153,6 +177,32 @@ async fn edit(client: impl QuerySecrets, args: &Edit) -> Result<(), NysmError> {
     if let Some(contents) = update_contents {
       let _ = client
         .update_secret_value(args.secret_id.clone(), contents)
+        .await?;
+    }
+  }
+
+  Ok(())
+}
+
+async fn create(client: impl QuerySecrets, args: &Create) -> Result<(), NysmError> {
+  if let Ok(dir) = temporary_directory() {
+    let initial_content = match args.edit_format {
+      DataFormat::Json => "{}".to_string(),
+      DataFormat::Yaml => "".to_string(),
+      DataFormat::Text => "".to_string(),
+    };
+
+    let secret_contents =
+      launch_editor(initial_content, dir, &args.edit_format, &args.edit_format)?;
+
+    if let Some(contents) = secret_contents {
+      let formatted_contents = reformat_data(&contents, &args.edit_format, &args.secret_format)?;
+      let _ = client
+        .create_secret(
+          args.secret_id.clone(),
+          formatted_contents,
+          args.description.clone(),
+        )
         .await?;
     }
   }
@@ -560,19 +610,80 @@ banana: true
 
       Ok(())
     }
+
+    #[test]
+    fn sets_create_subcommand() -> TestResult {
+      let args = "nysm -r us-west-2 create new-secret".split_whitespace();
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert_eq!(
+        arg_parser.command,
+        Commands::Create(Create {
+          secret_id: "new-secret".into(),
+          description: None,
+          edit_format: DataFormat::Yaml,
+          secret_format: DataFormat::Json,
+        })
+      );
+
+      Ok(())
+    }
+
+    #[test]
+    fn sets_create_subcommand_with_description() -> TestResult {
+      let args = vec![
+        "nysm",
+        "-r",
+        "us-west-2",
+        "create",
+        "new-secret",
+        "-d",
+        "Test secret",
+      ];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert_eq!(
+        arg_parser.command,
+        Commands::Create(Create {
+          secret_id: "new-secret".into(),
+          description: Some("Test secret".into()),
+          edit_format: DataFormat::Yaml,
+          secret_format: DataFormat::Json,
+        })
+      );
+
+      Ok(())
+    }
   }
 
   #[allow(clippy::field_reassign_with_default)]
   mod client {
     use super::*;
-    use crate::client::{GetSecretValueResult, ListSecretsResult, Secret, UpdateSecretValueResult};
+    use crate::client::{
+      CreateSecretResult, GetSecretValueResult, ListSecretsResult, Secret, UpdateSecretValueResult,
+    };
     use async_trait::async_trait;
 
-    #[derive(Default)]
     pub struct TestClient {
       fails_on_list_secrets: bool,
       fails_on_get_secret_value: bool,
       fails_on_update_secret_value: bool,
+      fails_on_create_secret: bool,
+      on_create_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
+      on_update_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
+    }
+
+    impl Default for TestClient {
+      fn default() -> Self {
+        Self {
+          fails_on_list_secrets: false,
+          fails_on_get_secret_value: false,
+          fails_on_update_secret_value: false,
+          fails_on_create_secret: false,
+          on_create_secret: None,
+          on_update_secret: None,
+        }
+      }
     }
 
     #[async_trait]
@@ -611,16 +722,41 @@ banana: true
       async fn update_secret_value(
         &self,
         _secret_id: String,
-        _secret_value: String,
+        secret_value: String,
       ) -> Result<UpdateSecretValueResult, NysmError> {
         if self.fails_on_update_secret_value {
           return Err(NysmError::AwsSecretValueUpdate);
+        }
+
+        if let Some(callback) = &self.on_update_secret {
+          callback(&secret_value);
         }
 
         Ok(UpdateSecretValueResult {
           name: Some("testy-test-secret".into()),
           uri: Some("some-unique-id".into()),
           version_id: Some("definitely-a-new-version-id".into()),
+        })
+      }
+
+      async fn create_secret(
+        &self,
+        _secret_id: String,
+        secret_value: String,
+        _description: Option<String>,
+      ) -> Result<CreateSecretResult, NysmError> {
+        if self.fails_on_create_secret {
+          return Err(NysmError::AwsSecretValueCreate);
+        }
+
+        if let Some(callback) = &self.on_create_secret {
+          callback(&secret_value);
+        }
+
+        Ok(CreateSecretResult {
+          name: Some("new-test-secret".into()),
+          uri: Some("some-new-unique-id".into()),
+          version_id: Some("new-secret-version-id".into()),
         })
       }
     }
@@ -872,6 +1008,152 @@ banana: true
               &Edit {
                 secret_id: "secret-one".into(),
                 edit_format: DataFormat::Json,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn uses_correct_formats_for_editing() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo 'updated_key: yaml_value\n' > "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+
+            client.on_update_secret = Some(Box::new(|secret_string| {
+              let parsed: serde_json::Value =
+                serde_json::from_str(secret_string).expect("Should be valid JSON");
+              assert_eq!(parsed["updated_key"], "yaml_value");
+            }));
+
+            let result = edit(
+              client,
+              &Edit {
+                secret_id: "secret-one".into(),
+                edit_format: DataFormat::Yaml,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+    }
+
+    mod create_output {
+      use super::*;
+
+      #[tokio::test]
+      async fn error_when_api_create_call_fails() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo 'test: value\n' >> "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+            client.fails_on_create_secret = true;
+
+            let result = create(
+              client,
+              &Create {
+                secret_id: "fake".into(),
+                description: None,
+                edit_format: DataFormat::Yaml,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert_eq!(result, Err(NysmError::AwsSecretValueCreate));
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn ok_when_api_create_call_succeeds() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo 'test: value\n' >> "))],
+          AssertUnwindSafe(async {
+            let client = TestClient::default();
+
+            let result = create(
+              client,
+              &Create {
+                secret_id: "new-secret".into(),
+                description: Some("Test description".into()),
+                edit_format: DataFormat::Yaml,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn ok_when_no_changes_made_in_editor() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo >/dev/null 2>&1 <<<"))],
+          AssertUnwindSafe(async {
+            let client = TestClient::default();
+
+            let result = create(
+              client,
+              &Create {
+                secret_id: "new-secret".into(),
+                description: None,
+                edit_format: DataFormat::Json,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn uses_correct_formats_for_editing() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo 'key: yaml_value\n' > "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+
+            client.on_create_secret = Some(Box::new(|secret_string| {
+              let parsed: serde_json::Value =
+                serde_json::from_str(secret_string).expect("Should be valid JSON");
+              assert_eq!(parsed["key"], "yaml_value");
+            }));
+
+            let result = create(
+              client,
+              &Create {
+                secret_id: "new-secret".into(),
+                description: None,
+                edit_format: DataFormat::Yaml,
                 secret_format: DataFormat::Json,
               },
             )
