@@ -1,16 +1,17 @@
 #![deny(missing_docs)]
 #![cfg(not(tarpaulin_include))]
 use crate::client::{
-  CreateSecretResult, GetSecretValueResult, ListSecretsResult, QuerySecrets, Secret,
-  UpdateSecretValueResult,
+  CreateSecretResult, DeleteSecretResult, GetSecretValueResult, ListSecretsResult, QuerySecrets,
+  Secret, UpdateSecretValueResult,
 };
 use crate::error::NysmError;
 
 use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_secretsmanager::operation::{
-  create_secret::CreateSecretOutput, get_secret_value::GetSecretValueOutput,
-  list_secrets::ListSecretsOutput, update_secret::UpdateSecretOutput,
+  create_secret::CreateSecretOutput, delete_secret::DeleteSecretOutput,
+  get_secret_value::GetSecretValueOutput, list_secrets::ListSecretsOutput,
+  update_secret::UpdateSecretOutput,
 };
 use aws_types::region::Region;
 
@@ -59,6 +60,16 @@ impl From<CreateSecretOutput> for CreateSecretResult {
       name: value.name().map(String::from),
       uri: value.arn().map(String::from),
       version_id: value.version_id().map(String::from),
+    }
+  }
+}
+
+impl From<DeleteSecretOutput> for DeleteSecretResult {
+  fn from(value: DeleteSecretOutput) -> Self {
+    Self {
+      name: value.name().map(String::from),
+      uri: value.arn().map(String::from),
+      deletion_date: value.deletion_date().map(|d| d.to_string()),
     }
   }
 }
@@ -179,6 +190,19 @@ impl QuerySecrets for AwsClient {
     match request.send().await {
       Ok(secret) => Ok(secret.into()),
       Err(_) => Err(NysmError::AwsSecretValueCreate),
+    }
+  }
+
+  async fn delete_secret(&self, secret_id: String) -> Result<DeleteSecretResult, NysmError> {
+    match self
+      .client
+      .delete_secret()
+      .secret_id(secret_id)
+      .send()
+      .await
+    {
+      Ok(secret) => Ok(secret.into()),
+      Err(_) => Err(NysmError::AwsSecretValueDelete),
     }
   }
 }

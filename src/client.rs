@@ -43,6 +43,16 @@ pub struct CreateSecretResult {
   pub version_id: Option<String>,
 }
 
+/// Represents a response from a secret provider after deleting a secret.
+pub struct DeleteSecretResult {
+  /// Name of secret
+  pub name: Option<String>,
+  /// Uniform resource locator of secret
+  pub uri: Option<String>,
+  /// Date that the secret will be deleted
+  pub deletion_date: Option<String>,
+}
+
 /// Represents a response from a secret provider that wraps around
 /// a list of secrets.
 #[derive(Default)]
@@ -153,4 +163,13 @@ pub trait QuerySecrets {
     secret_value: String,
     description: Option<String>,
   ) -> Result<CreateSecretResult, NysmError>;
+
+  /// Deletes a secret from the secret provider.
+  ///
+  /// # Arguments
+  /// * `secret_id` - String identifier for the secret to delete
+  ///
+  /// # Returns
+  /// Returns a result containing either the [DeleteSecretResult] struct or an [NysmError].
+  async fn delete_secret(&self, secret_id: String) -> Result<DeleteSecretResult, NysmError>;
 }
