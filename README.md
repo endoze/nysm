@@ -9,8 +9,8 @@
 
 Nysm is a command line utility designed to make interacting with a Secrets
 Provider like AWS Secrets Manager simple and easy. You can get a list of your
-existing secrets, show the value of a specific secret, or update the value of a
-specific secret.
+existing secrets, show the value of a specific secret, update the value of a
+specific secret, or even create new secrets.
 
 # Installation
 
@@ -36,4 +36,10 @@ Edit an existing secret:
 
 ```sh
 nysm edit some-secret-id
+```
+
+Create a new secret:
+
+```sh
+nysm create some-new-secret-id -d "This is a description for the secret"
 ```
