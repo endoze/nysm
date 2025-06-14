@@ -10,6 +10,8 @@ repository = "https://github.com/Endoze/nysm"
 documentation = "https://docs.rs/nysm"
 homepage = "https://github.com/Endoze/nysm"
 rust-version = "1.86.0"
+keywords = ["secrets", "aws", "cli", "secretsmanager", "security"]
+categories = ["command-line-utilities", "config", "authentication"]
 
 [lib]
 name = "nysm"
