@@ -133,7 +133,10 @@ impl QuerySecrets for AwsClient {
 
         Ok(ListSecretsResult { entries })
       }
-      Err(_) => Err(NysmError::AwsListSecretsNoList),
+      Err(e) => Err(NysmError::ListSecretsFailed(format!(
+        "AWS Secrets Manager: {}",
+        e
+      ))),
     }
   }
 
@@ -149,7 +152,10 @@ impl QuerySecrets for AwsClient {
       .await
     {
       Ok(secret) => Ok(secret.into()),
-      Err(_) => Err(NysmError::AwsSecretValueNoValueString),
+      Err(e) => Err(NysmError::GetSecretValueFailed(format!(
+        "AWS Secrets Manager: {}",
+        e
+      ))),
     }
   }
 
@@ -167,7 +173,10 @@ impl QuerySecrets for AwsClient {
       .await
     {
       Ok(secret) => Ok(secret.into()),
-      Err(_) => Err(NysmError::AwsSecretValueUpdate),
+      Err(e) => Err(NysmError::UpdateSecretFailed(format!(
+        "AWS Secrets Manager: {}",
+        e
+      ))),
     }
   }
 
@@ -189,7 +198,10 @@ impl QuerySecrets for AwsClient {
 
     match request.send().await {
       Ok(secret) => Ok(secret.into()),
-      Err(_) => Err(NysmError::AwsSecretValueCreate),
+      Err(e) => Err(NysmError::CreateSecretFailed(format!(
+        "AWS Secrets Manager: {}",
+        e
+      ))),
     }
   }
 
@@ -202,7 +214,10 @@ impl QuerySecrets for AwsClient {
       .await
     {
       Ok(secret) => Ok(secret.into()),
-      Err(_) => Err(NysmError::AwsSecretValueDelete),
+      Err(e) => Err(NysmError::DeleteSecretFailed(format!(
+        "AWS Secrets Manager: {}",
+        e
+      ))),
     }
   }
 }
