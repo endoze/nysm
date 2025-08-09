@@ -8,63 +8,70 @@ use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use tempfile::TempDir;
 
-/// Enum to define available secret providers
-#[derive(Clone, Debug, ValueEnum)]
-pub enum Provider {
-  /// AWS Secrets Manager
-  Aws,
-  /// GitHub Actions Secrets
-  Github,
-}
-
 /// This struct defines the main command line interface for Nysm.
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct ArgumentParser {
+  /// Which provider to use
+  #[command(subcommand)]
+  pub provider: Providers,
+}
+
+/// Available secret providers as subcommands
+#[derive(Subcommand, Debug)]
+pub enum Providers {
+  /// AWS Secrets Manager
+  Aws(AwsCommand),
+  /// GitHub Actions Secrets
+  Github(GitHubCommand),
+  /// Doppler Secrets Management
+  Doppler(DopplerCommand),
+}
+
+/// AWS provider command and arguments
+#[derive(Args, Debug)]
+pub struct AwsCommand {
+  /// AWS region to retrieve secrets from
+  #[arg(short, long)]
+  pub region: Option<String>,
   /// Which subcommand to use
   #[command(subcommand)]
   pub command: Commands,
-  /// Secret provider to use
-  #[arg(long, value_enum, default_value = "aws", global = true)]
-  pub provider: Provider,
-  /// AWS region to retrieve secrets from
-  #[arg(
-    short,
-    long,
-    global = true,
-    help_heading = "AWS Provider Options",
-    conflicts_with_all = ["github_token", "github_owner", "github_repo"]
-  )]
-  pub region: Option<String>,
+}
+
+/// GitHub provider command and arguments
+#[derive(Args, Debug)]
+pub struct GitHubCommand {
   /// GitHub personal access token (can also be set via GITHUB_TOKEN env var)
-  #[arg(
-    long,
-    env = "GITHUB_TOKEN",
-    global = true,
-    help_heading = "GitHub Provider Options",
-    required_if_eq("provider", "github"),
-    conflicts_with = "region"
-  )]
-  pub github_token: Option<String>,
+  #[arg(long, env = "GITHUB_TOKEN")]
+  pub token: Option<String>,
   /// GitHub repository owner (user or organization)
-  #[arg(
-    long,
-    global = true,
-    help_heading = "GitHub Provider Options",
-    required_if_eq("provider", "github"),
-    conflicts_with = "region"
-  )]
-  pub github_owner: Option<String>,
+  #[arg(long)]
+  pub owner: String,
   /// GitHub repository name
-  #[arg(
-    long,
-    global = true,
-    help_heading = "GitHub Provider Options",
-    required_if_eq("provider", "github"),
-    conflicts_with = "region"
-  )]
-  pub github_repo: Option<String>,
+  #[arg(long)]
+  pub repo: String,
+  /// Which subcommand to use
+  #[command(subcommand)]
+  pub command: Commands,
+}
+
+/// Doppler provider command and arguments
+#[derive(Args, Debug)]
+pub struct DopplerCommand {
+  /// Doppler service token (can also be set via DOPPLER_TOKEN env var)
+  #[arg(long, env = "DOPPLER_TOKEN")]
+  pub token: Option<String>,
+  /// Doppler project name
+  #[arg(long)]
+  pub project: String,
+  /// Doppler config/environment name (e.g., "dev", "staging", "prod")
+  #[arg(long)]
+  pub config: String,
+  /// Which subcommand to use
+  #[command(subcommand)]
+  pub command: Commands,
 }
 
 /// This enum defines the main command line subcommands for Nysm.
@@ -173,10 +180,11 @@ impl ArgumentParser {
   ///
   /// # Arguments
   /// * `client` - Trait object that implements [QuerySecrets]
+  /// * `command` - The command to execute
   ///
   #[cfg(not(tarpaulin_include))]
-  pub async fn run_subcommand(&self, client: Box<dyn QuerySecrets>) {
-    let result = match &self.command {
+  pub async fn run_subcommand(client: Box<dyn QuerySecrets>, command: &Commands) {
+    let result = match command {
       Commands::List(args) => {
         let result = list(&*client, args).await;
 
@@ -650,83 +658,108 @@ banana: true
     use super::*;
 
     #[test]
-    fn accepts_region() -> TestResult {
-      let args = "nysm -r us-west-2 list".split_whitespace();
+    fn aws_accepts_region() -> TestResult {
+      let args = "nysm aws -r us-west-2 list".split_whitespace();
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(arg_parser.region.unwrap(), "us-west-2".to_string());
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(aws.region, Some("us-west-2".to_string()));
+          assert!(matches!(aws.command, Commands::List(_)));
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn sets_list_subcommand() -> TestResult {
-      let args = "nysm -r us-west-2 list".split_whitespace();
+    fn aws_sets_list_subcommand() -> TestResult {
+      let args = "nysm aws list".split_whitespace();
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(arg_parser.command, Commands::List(List {}));
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(aws.command, Commands::List(List {}));
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn sets_show_subcommand() -> TestResult {
-      let args = "nysm -r us-west-2 show testing-secrets".split_whitespace();
+    fn aws_sets_show_subcommand() -> TestResult {
+      let args = "nysm aws show testing-secrets".split_whitespace();
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(
-        arg_parser.command,
-        Commands::Show(Show {
-          secret_id: "testing-secrets".into(),
-          print_format: DataFormat::Yaml,
-          secret_format: DataFormat::Json,
-        })
-      );
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(
+            aws.command,
+            Commands::Show(Show {
+              secret_id: "testing-secrets".into(),
+              print_format: DataFormat::Yaml,
+              secret_format: DataFormat::Json,
+            })
+          );
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn sets_edit_subcommand() -> TestResult {
-      let args = "nysm -r us-west-2 edit testing-secrets".split_whitespace();
+    fn aws_sets_edit_subcommand() -> TestResult {
+      let args = "nysm aws edit testing-secrets".split_whitespace();
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(
-        arg_parser.command,
-        Commands::Edit(Edit {
-          secret_id: "testing-secrets".into(),
-          edit_format: DataFormat::Yaml,
-          secret_format: DataFormat::Json,
-        })
-      );
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(
+            aws.command,
+            Commands::Edit(Edit {
+              secret_id: "testing-secrets".into(),
+              edit_format: DataFormat::Yaml,
+              secret_format: DataFormat::Json,
+            })
+          );
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn sets_create_subcommand() -> TestResult {
-      let args = "nysm -r us-west-2 create new-secret".split_whitespace();
+    fn aws_sets_create_subcommand() -> TestResult {
+      let args = "nysm aws create new-secret".split_whitespace();
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(
-        arg_parser.command,
-        Commands::Create(Create {
-          secret_id: "new-secret".into(),
-          description: None,
-          edit_format: DataFormat::Yaml,
-          secret_format: DataFormat::Json,
-        })
-      );
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(
+            aws.command,
+            Commands::Create(Create {
+              secret_id: "new-secret".into(),
+              description: None,
+              edit_format: DataFormat::Yaml,
+              secret_format: DataFormat::Json,
+            })
+          );
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn sets_create_subcommand_with_description() -> TestResult {
+    fn aws_sets_create_subcommand_with_description() -> TestResult {
       let args = vec![
         "nysm",
-        "-r",
-        "us-west-2",
+        "aws",
         "create",
         "new-secret",
         "-d",
@@ -734,125 +767,116 @@ banana: true
       ];
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(
-        arg_parser.command,
-        Commands::Create(Create {
-          secret_id: "new-secret".into(),
-          description: Some("Test secret".into()),
-          edit_format: DataFormat::Yaml,
-          secret_format: DataFormat::Json,
-        })
-      );
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(
+            aws.command,
+            Commands::Create(Create {
+              secret_id: "new-secret".into(),
+              description: Some("Test secret".into()),
+              edit_format: DataFormat::Yaml,
+              secret_format: DataFormat::Json,
+            })
+          );
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn sets_delete_subcommand() -> TestResult {
-      let args = "nysm -r us-west-2 delete test-secret".split_whitespace();
+    fn aws_sets_delete_subcommand() -> TestResult {
+      let args = "nysm aws delete test-secret".split_whitespace();
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert_eq!(
-        arg_parser.command,
-        Commands::Delete(Delete {
-          secret_id: "test-secret".into(),
-        })
-      );
+      match &arg_parser.provider {
+        Providers::Aws(aws) => {
+          assert_eq!(
+            aws.command,
+            Commands::Delete(Delete {
+              secret_id: "test-secret".into(),
+            })
+          );
+        }
+        _ => panic!("Expected AWS provider"),
+      }
 
       Ok(())
     }
 
     #[test]
-    fn defaults_to_aws_provider() -> TestResult {
-      let args = "nysm list".split_whitespace();
-      let arg_parser = ArgumentParser::try_parse_from(args)?;
-
-      assert!(matches!(arg_parser.provider, Provider::Aws));
-
-      Ok(())
-    }
-
-    #[test]
-    fn accepts_aws_provider() -> TestResult {
-      let args = "nysm --provider aws list".split_whitespace();
-      let arg_parser = ArgumentParser::try_parse_from(args)?;
-
-      assert!(matches!(arg_parser.provider, Provider::Aws));
-
-      Ok(())
-    }
-
-    #[test]
-    fn accepts_github_provider() -> TestResult {
+    fn github_accepts_all_options() -> TestResult {
       let args = vec![
         "nysm",
-        "--provider",
         "github",
-        "--github-token",
-        "test-token",
-        "--github-owner",
-        "test-owner",
-        "--github-repo",
-        "test-repo",
-        "list",
-      ];
-      let arg_parser = ArgumentParser::try_parse_from(args)?;
-
-      assert!(matches!(arg_parser.provider, Provider::Github));
-
-      Ok(())
-    }
-
-    #[test]
-    fn accepts_github_token() -> TestResult {
-      let args = vec!["nysm", "--github-token", "ghp_123456", "list"];
-      let arg_parser = ArgumentParser::try_parse_from(args)?;
-
-      assert_eq!(arg_parser.github_token, Some("ghp_123456".to_string()));
-
-      Ok(())
-    }
-
-    #[test]
-    fn accepts_github_owner() -> TestResult {
-      let args = vec!["nysm", "--github-owner", "myorg", "list"];
-      let arg_parser = ArgumentParser::try_parse_from(args)?;
-
-      assert_eq!(arg_parser.github_owner, Some("myorg".to_string()));
-
-      Ok(())
-    }
-
-    #[test]
-    fn accepts_github_repo() -> TestResult {
-      let args = vec!["nysm", "--github-repo", "myrepo", "list"];
-      let arg_parser = ArgumentParser::try_parse_from(args)?;
-
-      assert_eq!(arg_parser.github_repo, Some("myrepo".to_string()));
-
-      Ok(())
-    }
-
-    #[test]
-    fn accepts_all_github_options() -> TestResult {
-      let args = vec![
-        "nysm",
-        "--provider",
-        "github",
-        "--github-token",
+        "--token",
         "ghp_123456",
-        "--github-owner",
+        "--owner",
         "myorg",
-        "--github-repo",
+        "--repo",
         "myrepo",
         "list",
       ];
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
-      assert!(matches!(arg_parser.provider, Provider::Github));
-      assert_eq!(arg_parser.github_token, Some("ghp_123456".to_string()));
-      assert_eq!(arg_parser.github_owner, Some("myorg".to_string()));
-      assert_eq!(arg_parser.github_repo, Some("myrepo".to_string()));
+      match &arg_parser.provider {
+        Providers::Github(github) => {
+          assert_eq!(github.token, Some("ghp_123456".to_string()));
+          assert_eq!(github.owner, "myorg");
+          assert_eq!(github.repo, "myrepo");
+          assert!(matches!(github.command, Commands::List(_)));
+        }
+        _ => panic!("Expected GitHub provider"),
+      }
+
+      Ok(())
+    }
+
+    #[test]
+    fn github_requires_owner_and_repo() -> TestResult {
+      let args = vec!["nysm", "github", "list"];
+      let result = ArgumentParser::try_parse_from(args);
+
+      assert!(result.is_err());
+
+      Ok(())
+    }
+
+    #[test]
+    fn doppler_accepts_all_options() -> TestResult {
+      let args = vec![
+        "nysm",
+        "doppler",
+        "--token",
+        "dp.st.123456",
+        "--project",
+        "myproject",
+        "--config",
+        "production",
+        "list",
+      ];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      match &arg_parser.provider {
+        Providers::Doppler(doppler) => {
+          assert_eq!(doppler.token, Some("dp.st.123456".to_string()));
+          assert_eq!(doppler.project, "myproject");
+          assert_eq!(doppler.config, "production");
+          assert!(matches!(doppler.command, Commands::List(_)));
+        }
+        _ => panic!("Expected Doppler provider"),
+      }
+
+      Ok(())
+    }
+
+    #[test]
+    fn doppler_requires_project_and_config() -> TestResult {
+      let args = vec!["nysm", "doppler", "list"];
+      let result = ArgumentParser::try_parse_from(args);
+
+      assert!(result.is_err());
 
       Ok(())
     }
