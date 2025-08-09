@@ -8,6 +8,15 @@ use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use tempfile::TempDir;
 
+/// Enum to define available secret providers
+#[derive(Clone, Debug, ValueEnum)]
+pub enum Provider {
+  /// AWS Secrets Manager
+  Aws,
+  /// GitHub Actions Secrets
+  Github,
+}
+
 /// This struct defines the main command line interface for Nysm.
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -16,9 +25,46 @@ pub struct ArgumentParser {
   /// Which subcommand to use
   #[command(subcommand)]
   pub command: Commands,
-  /// Region to retreive secrets from
-  #[arg(short, long, global = true)]
+  /// Secret provider to use
+  #[arg(long, value_enum, default_value = "aws", global = true)]
+  pub provider: Provider,
+  /// AWS region to retrieve secrets from
+  #[arg(
+    short,
+    long,
+    global = true,
+    help_heading = "AWS Provider Options",
+    conflicts_with_all = ["github_token", "github_owner", "github_repo"]
+  )]
   pub region: Option<String>,
+  /// GitHub personal access token (can also be set via GITHUB_TOKEN env var)
+  #[arg(
+    long,
+    env = "GITHUB_TOKEN",
+    global = true,
+    help_heading = "GitHub Provider Options",
+    required_if_eq("provider", "github"),
+    conflicts_with = "region"
+  )]
+  pub github_token: Option<String>,
+  /// GitHub repository owner (user or organization)
+  #[arg(
+    long,
+    global = true,
+    help_heading = "GitHub Provider Options",
+    required_if_eq("provider", "github"),
+    conflicts_with = "region"
+  )]
+  pub github_owner: Option<String>,
+  /// GitHub repository name
+  #[arg(
+    long,
+    global = true,
+    help_heading = "GitHub Provider Options",
+    required_if_eq("provider", "github"),
+    conflicts_with = "region"
+  )]
+  pub github_repo: Option<String>,
 }
 
 /// This enum defines the main command line subcommands for Nysm.
@@ -129,10 +175,10 @@ impl ArgumentParser {
   /// * `client` - Trait object that implements [QuerySecrets]
   ///
   #[cfg(not(tarpaulin_include))]
-  pub async fn run_subcommand(&self, client: impl QuerySecrets) {
+  pub async fn run_subcommand(&self, client: Box<dyn QuerySecrets>) {
     let result = match &self.command {
       Commands::List(args) => {
-        let result = list(client, args).await;
+        let result = list(&*client, args).await;
 
         match result {
           Ok(list) => println!("{}", list),
@@ -141,10 +187,10 @@ impl ArgumentParser {
 
         Ok(())
       }
-      Commands::Edit(args) => edit(client, args).await,
-      Commands::Show(args) => show(client, args).await,
-      Commands::Create(args) => create(client, args).await,
-      Commands::Delete(args) => delete(client, args).await,
+      Commands::Edit(args) => edit(&*client, args).await,
+      Commands::Show(args) => show(&*client, args).await,
+      Commands::Create(args) => create(&*client, args).await,
+      Commands::Delete(args) => delete(&*client, args).await,
     };
 
     if let Err(error) = result {
@@ -153,13 +199,17 @@ impl ArgumentParser {
   }
 }
 
-async fn list(client: impl QuerySecrets, _args: &List) -> Result<String, NysmError> {
+async fn list(client: &dyn QuerySecrets, _args: &List) -> Result<String, NysmError> {
   let secrets_list = client.secrets_list().await?;
 
   Ok(secrets_list.table_display())
 }
 
-async fn show(client: impl QuerySecrets, args: &Show) -> Result<(), NysmError> {
+async fn show(client: &dyn QuerySecrets, args: &Show) -> Result<(), NysmError> {
+  if !client.supports_read() {
+    return Err(NysmError::SecretNotReadable);
+  }
+
   let secret_value = client.secret_value(args.secret_id.clone()).await?;
 
   let formatted_secret = reformat_data(
@@ -173,28 +223,54 @@ async fn show(client: impl QuerySecrets, args: &Show) -> Result<(), NysmError> {
   Ok(())
 }
 
-async fn edit(client: impl QuerySecrets, args: &Edit) -> Result<(), NysmError> {
-  let secret_value = client.secret_value(args.secret_id.clone()).await?;
+async fn edit(client: &dyn QuerySecrets, args: &Edit) -> Result<(), NysmError> {
+  if client.supports_read() {
+    let secret_value = client.secret_value(args.secret_id.clone()).await?;
 
-  if let Ok(dir) = temporary_directory() {
-    let update_contents = launch_editor(
-      secret_value.secret,
-      dir,
-      &args.secret_format,
-      &args.edit_format,
-    )?;
+    if let Ok(dir) = temporary_directory() {
+      let update_contents = launch_editor(
+        secret_value.secret,
+        dir,
+        &args.secret_format,
+        &args.edit_format,
+      )?;
 
-    if let Some(contents) = update_contents {
-      let _ = client
-        .update_secret_value(args.secret_id.clone(), contents)
-        .await?;
+      if let Some(contents) = update_contents {
+        let _ = client
+          .update_secret_value(args.secret_id.clone(), contents)
+          .await?;
+      }
+    }
+  } else {
+    let template = match args.edit_format {
+      DataFormat::Json => "{}".to_string(),
+      DataFormat::Yaml => "# Enter new secret value below\n".to_string(),
+      DataFormat::Text => "".to_string(),
+    };
+
+    if let Ok(dir) = temporary_directory() {
+      let update_contents =
+        launch_editor(template.clone(), dir, &args.edit_format, &args.edit_format)?;
+
+      if let Some(contents) = update_contents {
+        if contents == template {
+          println!("No changes made, skipping update.");
+        } else {
+          println!("Warning: This will completely replace the existing secret.");
+          let formatted_contents =
+            reformat_data(&contents, &args.edit_format, &args.secret_format)?;
+          let _ = client
+            .update_secret_value(args.secret_id.clone(), formatted_contents)
+            .await?;
+        }
+      }
     }
   }
 
   Ok(())
 }
 
-async fn create(client: impl QuerySecrets, args: &Create) -> Result<(), NysmError> {
+async fn create(client: &dyn QuerySecrets, args: &Create) -> Result<(), NysmError> {
   if let Ok(dir) = temporary_directory() {
     let initial_content = match args.edit_format {
       DataFormat::Json => "{}".to_string(),
@@ -220,7 +296,7 @@ async fn create(client: impl QuerySecrets, args: &Create) -> Result<(), NysmErro
   Ok(())
 }
 
-async fn delete(client: impl QuerySecrets, args: &Delete) -> Result<(), NysmError> {
+async fn delete(client: &dyn QuerySecrets, args: &Delete) -> Result<(), NysmError> {
   let _ = client.delete_secret(args.secret_id.clone()).await?;
 
   Ok(())
@@ -356,7 +432,7 @@ where
   let json_data = reformat_data(&file_contents, edit_format, secret_format)?;
 
   if json_data.eq(&contents) {
-    println!("It seems the file hasn't changed, not persisting back to AWS Secrets Manager.");
+    println!("It seems the file hasn't changed, not persisting changes.");
 
     Ok(None)
   } else {
@@ -685,6 +761,101 @@ banana: true
 
       Ok(())
     }
+
+    #[test]
+    fn defaults_to_aws_provider() -> TestResult {
+      let args = "nysm list".split_whitespace();
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert!(matches!(arg_parser.provider, Provider::Aws));
+
+      Ok(())
+    }
+
+    #[test]
+    fn accepts_aws_provider() -> TestResult {
+      let args = "nysm --provider aws list".split_whitespace();
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert!(matches!(arg_parser.provider, Provider::Aws));
+
+      Ok(())
+    }
+
+    #[test]
+    fn accepts_github_provider() -> TestResult {
+      let args = vec![
+        "nysm",
+        "--provider",
+        "github",
+        "--github-token",
+        "test-token",
+        "--github-owner",
+        "test-owner",
+        "--github-repo",
+        "test-repo",
+        "list",
+      ];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert!(matches!(arg_parser.provider, Provider::Github));
+
+      Ok(())
+    }
+
+    #[test]
+    fn accepts_github_token() -> TestResult {
+      let args = vec!["nysm", "--github-token", "ghp_123456", "list"];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert_eq!(arg_parser.github_token, Some("ghp_123456".to_string()));
+
+      Ok(())
+    }
+
+    #[test]
+    fn accepts_github_owner() -> TestResult {
+      let args = vec!["nysm", "--github-owner", "myorg", "list"];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert_eq!(arg_parser.github_owner, Some("myorg".to_string()));
+
+      Ok(())
+    }
+
+    #[test]
+    fn accepts_github_repo() -> TestResult {
+      let args = vec!["nysm", "--github-repo", "myrepo", "list"];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert_eq!(arg_parser.github_repo, Some("myrepo".to_string()));
+
+      Ok(())
+    }
+
+    #[test]
+    fn accepts_all_github_options() -> TestResult {
+      let args = vec![
+        "nysm",
+        "--provider",
+        "github",
+        "--github-token",
+        "ghp_123456",
+        "--github-owner",
+        "myorg",
+        "--github-repo",
+        "myrepo",
+        "list",
+      ];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert!(matches!(arg_parser.provider, Provider::Github));
+      assert_eq!(arg_parser.github_token, Some("ghp_123456".to_string()));
+      assert_eq!(arg_parser.github_owner, Some("myorg".to_string()));
+      assert_eq!(arg_parser.github_repo, Some("myrepo".to_string()));
+
+      Ok(())
+    }
   }
 
   #[allow(clippy::field_reassign_with_default)]
@@ -702,6 +873,7 @@ banana: true
       fails_on_update_secret_value: bool,
       fails_on_create_secret: bool,
       fails_on_delete_secret: bool,
+      is_write_only: bool,
       on_create_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
       on_update_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
       on_delete_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
@@ -715,6 +887,7 @@ banana: true
           fails_on_update_secret_value: false,
           fails_on_create_secret: false,
           fails_on_delete_secret: false,
+          is_write_only: false,
           on_create_secret: None,
           on_update_secret: None,
           on_delete_secret: None,
@@ -724,9 +897,13 @@ banana: true
 
     #[async_trait]
     impl QuerySecrets for TestClient {
+      fn supports_read(&self) -> bool {
+        !self.is_write_only
+      }
+
       async fn secrets_list(&self) -> Result<ListSecretsResult, NysmError> {
         if self.fails_on_list_secrets {
-          return Err(NysmError::AwsListSecretsNoList);
+          return Err(NysmError::ListSecretsFailed("Test error".to_string()));
         }
 
         Ok(ListSecretsResult {
@@ -739,8 +916,12 @@ banana: true
       }
 
       async fn secret_value(&self, _secret_id: String) -> Result<GetSecretValueResult, NysmError> {
+        if self.is_write_only {
+          return Err(NysmError::SecretNotReadable);
+        }
+
         if self.fails_on_get_secret_value {
-          return Err(NysmError::AwsSecretValueNoValueString);
+          return Err(NysmError::GetSecretValueFailed("Test error".to_string()));
         }
 
         let secret_value = json!({
@@ -761,7 +942,7 @@ banana: true
         secret_value: String,
       ) -> Result<UpdateSecretValueResult, NysmError> {
         if self.fails_on_update_secret_value {
-          return Err(NysmError::AwsSecretValueUpdate);
+          return Err(NysmError::UpdateSecretFailed("Test error".to_string()));
         }
 
         if let Some(callback) = &self.on_update_secret {
@@ -782,7 +963,7 @@ banana: true
         _description: Option<String>,
       ) -> Result<CreateSecretResult, NysmError> {
         if self.fails_on_create_secret {
-          return Err(NysmError::AwsSecretValueCreate);
+          return Err(NysmError::CreateSecretFailed("Test error".to_string()));
         }
 
         if let Some(callback) = &self.on_create_secret {
@@ -798,7 +979,7 @@ banana: true
 
       async fn delete_secret(&self, secret_id: String) -> Result<DeleteSecretResult, NysmError> {
         if self.fails_on_delete_secret {
-          return Err(NysmError::AwsSecretValueDelete);
+          return Err(NysmError::DeleteSecretFailed("Test error".to_string()));
         }
 
         if let Some(callback) = &self.on_delete_secret {
@@ -821,9 +1002,12 @@ banana: true
         let mut client = TestClient::default();
         client.fails_on_list_secrets = true;
 
-        let result = list(client, &List {}).await;
+        let result = list(&client, &List {}).await;
 
-        assert_eq!(result, Err(NysmError::AwsListSecretsNoList));
+        assert_eq!(
+          result,
+          Err(NysmError::ListSecretsFailed("Test error".to_string()))
+        );
 
         Ok(())
       }
@@ -832,7 +1016,7 @@ banana: true
       async fn ok_when_list_api_call_succeeds() -> TestResult {
         let client = TestClient::default();
 
-        let result = list(client, &List {}).await;
+        let result = list(&client, &List {}).await;
 
         assert!(result.is_ok());
 
@@ -849,7 +1033,7 @@ banana: true
         client.fails_on_get_secret_value = true;
 
         let result = show(
-          client,
+          &client,
           &Show {
             secret_id: "fake".into(),
             print_format: DataFormat::Json,
@@ -858,7 +1042,10 @@ banana: true
         )
         .await;
 
-        assert_eq!(result, Err(NysmError::AwsSecretValueNoValueString));
+        assert_eq!(
+          result,
+          Err(NysmError::GetSecretValueFailed("Test error".to_string()))
+        );
 
         Ok(())
       }
@@ -868,7 +1055,7 @@ banana: true
         let client = TestClient::default();
 
         let result = show(
-          client,
+          &client,
           &Show {
             secret_id: "fake".into(),
             print_format: DataFormat::Json,
@@ -878,6 +1065,26 @@ banana: true
         .await;
 
         assert!(result.is_ok());
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn error_when_provider_does_not_support_read() -> TestResult {
+        let mut client = TestClient::default();
+        client.is_write_only = true;
+
+        let result = show(
+          &client,
+          &Show {
+            secret_id: "write-only-secret".into(),
+            print_format: DataFormat::Yaml,
+            secret_format: DataFormat::Json,
+          },
+        )
+        .await;
+
+        assert_eq!(result, Err(NysmError::SecretNotReadable));
 
         Ok(())
       }
@@ -895,7 +1102,7 @@ banana: true
             client.fails_on_update_secret_value = true;
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "fake".into(),
                 edit_format: DataFormat::Yaml,
@@ -904,7 +1111,10 @@ banana: true
             )
             .await;
 
-            assert_eq!(result, Err(NysmError::AwsSecretValueUpdate));
+            assert_eq!(
+              result,
+              Err(NysmError::UpdateSecretFailed("Test error".to_string()))
+            );
           }),
         )
         .await;
@@ -920,7 +1130,7 @@ banana: true
             let client = TestClient::default();
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "fake".into(),
                 edit_format: DataFormat::Json,
@@ -950,7 +1160,7 @@ banana: true
             let client = TestClient::default();
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "fake".into(),
                 edit_format: DataFormat::Yaml,
@@ -981,7 +1191,7 @@ banana: true
             client.fails_on_get_secret_value = true;
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "fake".into(),
                 edit_format: DataFormat::Json,
@@ -990,7 +1200,10 @@ banana: true
             )
             .await;
 
-            assert_eq!(result, Err(NysmError::AwsSecretValueNoValueString));
+            assert_eq!(
+              result,
+              Err(NysmError::GetSecretValueFailed("Test error".to_string()))
+            );
           }),
         )
         .await;
@@ -1006,7 +1219,7 @@ banana: true
             let client = TestClient::default();
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "fake".into(),
                 edit_format: DataFormat::Json,
@@ -1031,7 +1244,7 @@ banana: true
             let client = TestClient::default();
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "fake".into(),
                 edit_format: DataFormat::Json,
@@ -1056,7 +1269,7 @@ banana: true
             let client = TestClient::default();
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "secret-one".into(),
                 edit_format: DataFormat::Json,
@@ -1087,7 +1300,7 @@ banana: true
             }));
 
             let result = edit(
-              client,
+              &client,
               &Edit {
                 secret_id: "secret-one".into(),
                 edit_format: DataFormat::Yaml,
@@ -1100,6 +1313,144 @@ banana: true
           }),
         )
         .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn write_only_provider_uses_json_template() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo '{\"new_key\": \"new_value\"}' > "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+            client.is_write_only = true;
+            client.on_update_secret = Some(Box::new(|secret_string| {
+              let parsed: serde_json::Value =
+                serde_json::from_str(secret_string).expect("Should be valid JSON");
+              assert_eq!(parsed["new_key"], "new_value");
+            }));
+
+            let result = edit(
+              &client,
+              &Edit {
+                secret_id: "write-only-secret".into(),
+                edit_format: DataFormat::Json,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn write_only_provider_uses_yaml_template() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo 'key: value\nanother: true' > "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+            client.is_write_only = true;
+            client.on_update_secret = Some(Box::new(|secret_string| {
+              let parsed: serde_json::Value =
+                serde_json::from_str(secret_string).expect("Should be valid JSON");
+              assert_eq!(parsed["key"], "value");
+              assert_eq!(parsed["another"], true);
+            }));
+
+            let result = edit(
+              &client,
+              &Edit {
+                secret_id: "write-only-secret".into(),
+                edit_format: DataFormat::Yaml,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn write_only_provider_uses_text_template() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo 'plain text secret' > "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+            client.is_write_only = true;
+            client.on_update_secret = Some(Box::new(|secret_string| {
+              assert_eq!(secret_string.trim(), "plain text secret");
+            }));
+
+            let result = edit(
+              &client,
+              &Edit {
+                secret_id: "write-only-secret".into(),
+                edit_format: DataFormat::Text,
+                secret_format: DataFormat::Text,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn write_only_provider_skips_update_when_no_changes() -> TestResult {
+        async_with_env_vars(
+          vec![("EDITOR", Some("echo '{}' > "))],
+          AssertUnwindSafe(async {
+            let mut client = TestClient::default();
+            client.is_write_only = true;
+            let update_called = std::sync::Arc::new(std::sync::Mutex::new(false));
+            let update_called_clone = update_called.clone();
+            client.on_update_secret = Some(Box::new(move |_| {
+              *update_called_clone.lock().unwrap() = true;
+            }));
+
+            let result = edit(
+              &client,
+              &Edit {
+                secret_id: "write-only-secret".into(),
+                edit_format: DataFormat::Json,
+                secret_format: DataFormat::Json,
+              },
+            )
+            .await;
+
+            assert!(result.is_ok());
+            assert!(
+              !*update_called.lock().unwrap(),
+              "Update should not be called when content is unchanged"
+            );
+          }),
+        )
+        .await;
+
+        Ok(())
+      }
+
+      #[tokio::test]
+      async fn write_only_provider_cannot_read_secret() -> TestResult {
+        let mut client = TestClient::default();
+        client.is_write_only = true;
+
+        let result = client.secret_value("test-secret".to_string()).await;
+        assert!(matches!(result, Err(NysmError::SecretNotReadable)));
 
         Ok(())
       }
@@ -1117,7 +1468,7 @@ banana: true
             client.fails_on_create_secret = true;
 
             let result = create(
-              client,
+              &client,
               &Create {
                 secret_id: "fake".into(),
                 description: None,
@@ -1127,7 +1478,10 @@ banana: true
             )
             .await;
 
-            assert_eq!(result, Err(NysmError::AwsSecretValueCreate));
+            assert_eq!(
+              result,
+              Err(NysmError::CreateSecretFailed("Test error".to_string()))
+            );
           }),
         )
         .await;
@@ -1143,7 +1497,7 @@ banana: true
             let client = TestClient::default();
 
             let result = create(
-              client,
+              &client,
               &Create {
                 secret_id: "new-secret".into(),
                 description: Some("Test description".into()),
@@ -1169,7 +1523,7 @@ banana: true
             let client = TestClient::default();
 
             let result = create(
-              client,
+              &client,
               &Create {
                 secret_id: "new-secret".into(),
                 description: None,
@@ -1201,7 +1555,7 @@ banana: true
             }));
 
             let result = create(
-              client,
+              &client,
               &Create {
                 secret_id: "new-secret".into(),
                 description: None,
@@ -1229,14 +1583,17 @@ banana: true
         client.fails_on_delete_secret = true;
 
         let result = delete(
-          client,
+          &client,
           &Delete {
             secret_id: "fake".into(),
           },
         )
         .await;
 
-        assert_eq!(result, Err(NysmError::AwsSecretValueDelete));
+        assert_eq!(
+          result,
+          Err(NysmError::DeleteSecretFailed("Test error".to_string()))
+        );
 
         Ok(())
       }
@@ -1246,7 +1603,7 @@ banana: true
         let client = TestClient::default();
 
         let result = delete(
-          client,
+          &client,
           &Delete {
             secret_id: "test-secret".into(),
           },
@@ -1267,7 +1624,7 @@ banana: true
         }));
 
         let result = delete(
-          client,
+          &client,
           &Delete {
             secret_id: "test-secret".into(),
           },
