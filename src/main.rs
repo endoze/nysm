@@ -1,9 +1,9 @@
 #![cfg(not(tarpaulin_include))]
 use clap::Parser;
 use nysm::{
-  cli::{ArgumentParser, Provider},
+  cli::{ArgumentParser, Providers},
   client::QuerySecrets,
-  provider::{aws::AwsClient, github::GitHubClient},
+  provider::{aws::AwsClient, github::GitHubClient, doppler::DopplerClient},
 };
 
 #[tokio::main]
@@ -14,18 +14,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let cli = ArgumentParser::parse();
 
-  let client: Box<dyn QuerySecrets> = match cli.provider {
-    Provider::Aws => Box::new(AwsClient::new(cli.region.clone()).await),
-    Provider::Github => {
-      let token = cli.github_token.clone().unwrap();
-      let owner = cli.github_owner.clone().unwrap();
-      let repo = cli.github_repo.clone().unwrap();
-
-      Box::new(GitHubClient::new(token, owner, repo)?)
+  let (client, command): (Box<dyn QuerySecrets>, _) = match &cli.provider {
+    Providers::Aws(aws) => {
+      let client = Box::new(AwsClient::new(aws.region.clone()).await);
+      (client, &aws.command)
+    }
+    Providers::Github(github) => {
+      let token = github.token.clone()
+        .ok_or("GitHub token is required. Set via --token or GITHUB_TOKEN env var")?;
+      let client = Box::new(GitHubClient::new(token, github.owner.clone(), github.repo.clone())?);
+      (client, &github.command)
+    }
+    Providers::Doppler(doppler) => {
+      let token = doppler.token.clone()
+        .ok_or("Doppler token is required. Set via --token or DOPPLER_TOKEN env var")?;
+      let client = Box::new(DopplerClient::new(token, doppler.project.clone(), doppler.config.clone())?);
+      (client, &doppler.command)
     }
   };
 
-  cli.run_subcommand(client).await;
+  ArgumentParser::run_subcommand(client, command).await;
 
   Ok(())
 }
