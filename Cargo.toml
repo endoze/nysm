@@ -9,7 +9,7 @@ readme = "README.md"
 repository = "https://github.com/Endoze/nysm"
 documentation = "https://docs.rs/nysm"
 homepage = "https://github.com/Endoze/nysm"
-rust-version = "1.86.0"
+rust-version = "1.88.0"
 keywords = ["secrets", "aws", "cli", "secretsmanager", "security"]
 categories = ["command-line-utilities", "config", "authentication"]
 
@@ -19,20 +19,20 @@ name = "nysm"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-aws-config = "1.6.1"
-aws-sdk-secretsmanager = "1.74.0"
-aws-types = "1.3.7"
+aws-config = "1.8.11"
+aws-sdk-secretsmanager = "1.91.0"
+aws-types = "1.3.10"
 base64 = "0.22"
-bat = "0.25"
-clap = { version = "4.4", features = ["derive", "env"]}
-octocrab = "0.44"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+bat = "0.26"
+clap = { version = "4.6", features = ["derive", "env"]}
+octocrab = "0.54"
+reqwest = { version = "0.13", features = ["json", "query", "rustls-no-provider"], default-features = false }
 rustls = { version = "0.23", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 sodiumoxide = "0.2"
 serde_json = "1"
-serde_yml = "0.0.12"
-tabled = "0.19"
+serde_yml = "0.0.13"
+tabled = "0.21"
 tempfile = "3"
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
@@ -41,8 +41,8 @@ tokio = { version = "1", features = ["full"] }
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 
 [dev-dependencies]
-lazy_static = { version = "1.4.0" }
-futures = "0.3.28"
+lazy_static = { version = "1.5.0" }
+futures = "0.3.33"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]

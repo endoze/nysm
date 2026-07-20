@@ -333,7 +333,15 @@ fn reformat_data(
 
       match destination_format {
         DataFormat::Json => serde_json::to_string_pretty(&json_value)?,
-        DataFormat::Yaml => serde_yml::to_string(&json_value)?,
+        DataFormat::Yaml => {
+          let mut yaml = serde_yml::to_string(&json_value)?;
+
+          if !yaml.ends_with('\n') {
+            yaml.push('\n');
+          }
+
+          yaml
+        }
         DataFormat::Text => String::from(content),
       }
     }
@@ -1196,7 +1204,7 @@ banana: true
             assert_eq!(
               result,
               Err(NysmError::SerdeYaml(
-                serde_yml::from_str::<String>("::::").unwrap_err()
+                serde_yml::from_str::<String>("{").unwrap_err()
               ))
             );
           }),
