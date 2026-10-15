@@ -36,6 +36,7 @@ tabled = "0.21"
 tempfile = "3"
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
+google-cloud-secretmanager-v1 = { version = "1.12.0", default-features = false }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }

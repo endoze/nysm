@@ -3,7 +3,7 @@ use clap::Parser;
 use nysm::{
   cli::{ArgumentParser, Providers},
   client::QuerySecrets,
-  provider::{aws::AwsClient, github::GitHubClient, doppler::DopplerClient},
+  provider::{aws::AwsClient, github::GitHubClient, doppler::DopplerClient, gcp::GcpClient},
 };
 
 #[tokio::main]
@@ -30,6 +30,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("Doppler token is required. Set via --token or DOPPLER_TOKEN env var")?;
       let client = Box::new(DopplerClient::new(token, doppler.project.clone(), doppler.config.clone())?);
       (client, &doppler.command)
+    }
+    Providers::Gcp(gcp) => {
+      let client = Box::new(GcpClient::new(gcp.project.clone()).await?);
+      (client, &gcp.command)
     }
   };
 

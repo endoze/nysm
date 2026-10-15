@@ -27,6 +27,9 @@ pub enum Providers {
   Github(GitHubCommand),
   /// Doppler Secrets Management
   Doppler(DopplerCommand),
+  /// Google Cloud Secret Manager
+  #[command(alias = "google")]
+  Gcp(GcpCommand),
 }
 
 /// AWS provider command and arguments
@@ -69,6 +72,17 @@ pub struct DopplerCommand {
   /// Doppler config/environment name (e.g., "dev", "staging", "prod")
   #[arg(long)]
   pub config: String,
+  /// Which subcommand to use
+  #[command(subcommand)]
+  pub command: Commands,
+}
+
+/// Google Cloud provider command and arguments
+#[derive(Args, Debug)]
+pub struct GcpCommand {
+  /// Google Cloud project ID (can also be set via GOOGLE_CLOUD_PROJECT env var)
+  #[arg(long, env = "GOOGLE_CLOUD_PROJECT")]
+  pub project: String,
   /// Which subcommand to use
   #[command(subcommand)]
   pub command: Commands,
@@ -885,6 +899,67 @@ banana: true
       let result = ArgumentParser::try_parse_from(args);
 
       assert!(result.is_err());
+
+      Ok(())
+    }
+
+    #[test]
+    fn gcp_accepts_project() -> TestResult {
+      let args = vec!["nysm", "gcp", "--project", "my-project", "list"];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      match &arg_parser.provider {
+        Providers::Gcp(gcp) => {
+          assert_eq!(gcp.project, "my-project");
+          assert!(matches!(gcp.command, Commands::List(_)));
+        }
+        _ => panic!("Expected GCP provider"),
+      }
+
+      Ok(())
+    }
+
+    #[test]
+    fn google_is_an_alias_for_gcp() -> TestResult {
+      let args = vec!["nysm", "google", "--project", "my-project", "list"];
+      let arg_parser = ArgumentParser::try_parse_from(args)?;
+
+      assert!(matches!(arg_parser.provider, Providers::Gcp(_)));
+
+      Ok(())
+    }
+
+    #[tokio::test]
+    async fn gcp_reads_project_from_env() -> TestResult {
+      async_with_env_vars(
+        vec![("GOOGLE_CLOUD_PROJECT", Some("env-project"))],
+        AssertUnwindSafe(async {
+          let args = vec!["nysm", "gcp", "list"];
+          let arg_parser = ArgumentParser::try_parse_from(args).expect("Should parse");
+
+          match &arg_parser.provider {
+            Providers::Gcp(gcp) => assert_eq!(gcp.project, "env-project"),
+            _ => panic!("Expected GCP provider"),
+          }
+        }),
+      )
+      .await;
+
+      Ok(())
+    }
+
+    #[tokio::test]
+    async fn gcp_requires_project() -> TestResult {
+      async_with_env_vars(
+        vec![("GOOGLE_CLOUD_PROJECT", None)],
+        AssertUnwindSafe(async {
+          let args = vec!["nysm", "gcp", "list"];
+          let result = ArgumentParser::try_parse_from(args);
+
+          assert!(result.is_err());
+        }),
+      )
+      .await;
 
       Ok(())
     }
