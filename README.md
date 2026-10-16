@@ -134,6 +134,26 @@ Your AWS credentials need the following IAM permissions:
 }
 ```
 
+### Google Cloud Secret Manager
+
+Use the `gcp` provider (or its alias `google`) with a project ID, passed via
+`--project` or the `GOOGLE_CLOUD_PROJECT` environment variable:
+
+```sh
+nysm gcp --project my-project list
+GOOGLE_CLOUD_PROJECT=my-project nysm google show my-secret
+```
+
+Nysm authenticates with
+[Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials),
+for example after `gcloud auth application-default login`. Your principal
+needs the `roles/secretmanager.admin` role, or the `secretmanager.secrets.*`
+and `secretmanager.versions.add`/`secretmanager.versions.access` permissions.
+
+`show` reads the `latest` version, and `edit` adds a new version. `create`
+uses automatic replication and stores the description in the secret's
+`description` annotation.
+
 ## Examples
 
 ### Managing Application Configuration
