@@ -63,7 +63,7 @@ pub struct ListSecretsResult {
 
 impl ListSecretsResult {
   /// Creates an iterator from the referenced [ListSecretsResult]
-  pub fn iter(&self) -> GetSecretsResultIter {
+  pub fn iter(&self) -> GetSecretsResultIter<'_> {
     self.into_iter()
   }
 

@@ -1,27 +1,24 @@
 [workspace]
-# path of the git-cliff configuration
-changelog_config = "cliff.toml"
-
-# enable changelog updates
 changelog_update = true
-
-# update dependencies with `cargo update`
-dependencies_update = true
-
-# create tags for the releases
+# Dependabot (with a cooldown) owns dependency updates; release PRs only release.
+dependencies_update = false
 git_tag_enable = true
-
-# disable GitHub releases
+# dist's release.yml owns the GitHub Release; release-plz only tags.
 git_release_enable = false
-
-# labels for the release PR
 pr_labels = ["release"]
-
-# disallow updating repositories with uncommitted changes
 allow_dirty = false
-
-# disallow packaging with uncommitted changes
 publish_allow_dirty = false
-
-# disable running `cargo-semver-checks`
 semver_check = false
+
+[changelog]
+# release-plz's default parsers, plus skips for Dependabot's grouped bumps.
+commit_parsers = [
+  { message = "^chore\\(deps\\)", skip = true },
+  { message = "^ci\\(deps\\)", skip = true },
+  { message = "^feat", group = "added" },
+  { message = "^changed", group = "changed" },
+  { message = "^deprecated", group = "deprecated" },
+  { message = "^fix", group = "fixed" },
+  { message = "^security", group = "security" },
+  { message = "^.*", group = "other" },
+]

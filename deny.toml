@@ -1,0 +1,7 @@
+[graph]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []

@@ -1,5 +1,6 @@
 #![deny(missing_docs)]
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 #[repr(u8)]
 /// Enum to define all of the possible errors that can occur during normal
 /// use of Nysm.
@@ -10,7 +11,7 @@ pub enum NysmError {
 
   /// Error occurs when attempting to parse data as Text fails.
   #[error("Unable to parse data as yaml")]
-  SerdeYaml(#[from] serde_yml::Error),
+  SerdeYaml(#[from] serde_saphyr::Error),
 
   /// Error occurs when pretty printing the contents of a secret fails.
   #[error("Unable to pretty print data")]
@@ -74,7 +75,7 @@ mod tests {
 
   #[test]
   fn test_serde_yaml_error() {
-    let error = NysmError::SerdeYaml(serde_yml::Error::custom("custom error"));
+    let error = NysmError::SerdeYaml(serde_saphyr::Error::custom("custom error"));
     assert_eq!(error.to_string(), "Unable to parse data as yaml");
   }
 
@@ -86,10 +87,7 @@ mod tests {
 
   #[test]
   fn test_io_error() {
-    let error = NysmError::IO(std::io::Error::new(
-      std::io::ErrorKind::Other,
-      "custom error",
-    ));
+    let error = NysmError::IO(std::io::Error::other("custom error"));
     assert_eq!(
       error.to_string(),
       "Unable to read/write file caused by: custom error"
@@ -163,7 +161,7 @@ mod tests {
   fn test_partial_eq() {
     let error1 = NysmError::SerdeJson(serde_json::Error::custom("custom error"));
     let error2 = NysmError::SerdeJson(serde_json::Error::custom("custom error"));
-    let error3 = NysmError::SerdeYaml(serde_yml::Error::custom("different error"));
+    let error3 = NysmError::SerdeYaml(serde_saphyr::Error::custom("different error"));
 
     assert_eq!(error1, error2);
     assert_ne!(error1, error3);
