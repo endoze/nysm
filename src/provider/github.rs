@@ -100,21 +100,26 @@ impl GitHubClient {
     public_key: &PublicKey,
     secret_value: &str,
   ) -> Result<String, NysmError> {
-    sodiumoxide::init().map_err(|_| {
-      NysmError::InvalidConfiguration("Failed to initialize sodium crypto library".to_string())
-    })?;
-
-    let key_bytes = STANDARD
-      .decode(&public_key.key)
-      .map_err(|e| NysmError::InvalidConfiguration(format!("Invalid public key format: {}", e)))?;
-
-    let public_key = sodiumoxide::crypto::box_::PublicKey::from_slice(&key_bytes)
-      .ok_or_else(|| NysmError::InvalidConfiguration("Invalid public key".to_string()))?;
-
-    let encrypted = sodiumoxide::crypto::sealedbox::seal(secret_value.as_bytes(), &public_key);
-
-    Ok(STANDARD.encode(encrypted))
+    seal_for_public_key(&public_key.key, secret_value)
   }
+}
+
+/// Encrypt `secret_value` as a libsodium sealed box (`crypto_box_seal`) for
+/// a base64-encoded X25519 public key, returning the base64 ciphertext that
+/// GitHub's secrets API expects.
+fn seal_for_public_key(public_key_b64: &str, secret_value: &str) -> Result<String, NysmError> {
+  let key_bytes = STANDARD
+    .decode(public_key_b64)
+    .map_err(|e| NysmError::InvalidConfiguration(format!("Invalid public key format: {}", e)))?;
+
+  let public_key = crypto_box::PublicKey::from_slice(&key_bytes)
+    .map_err(|_| NysmError::InvalidConfiguration("Invalid public key".to_string()))?;
+
+  let encrypted = public_key
+    .seal(&mut crypto_box::aead::OsRng, secret_value.as_bytes())
+    .map_err(|_| NysmError::InvalidConfiguration("Failed to encrypt secret".to_string()))?;
+
+  Ok(STANDARD.encode(encrypted))
 }
 
 #[async_trait]
@@ -236,5 +241,40 @@ impl QuerySecrets for GitHubClient {
       uri: None,
       deletion_date: None,
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn sealed_value_opens_with_matching_secret_key() {
+    let secret_key = crypto_box::SecretKey::generate(&mut crypto_box::aead::OsRng);
+    let public_key_b64 = STANDARD.encode(secret_key.public_key().as_bytes());
+
+    let sealed_b64 = seal_for_public_key(&public_key_b64, "hunter2").unwrap();
+    let sealed = STANDARD.decode(sealed_b64).unwrap();
+
+    assert_eq!(sealed.len(), crypto_box::SEALBYTES + "hunter2".len());
+    assert_eq!(secret_key.unseal(&sealed).unwrap(), b"hunter2");
+  }
+
+  #[test]
+  fn rejects_public_key_that_is_not_base64() {
+    assert!(matches!(
+      seal_for_public_key("not base64!", "value"),
+      Err(NysmError::InvalidConfiguration(_))
+    ));
+  }
+
+  #[test]
+  fn rejects_public_key_with_wrong_length() {
+    let short_key = STANDARD.encode([0u8; 16]);
+
+    assert!(matches!(
+      seal_for_public_key(&short_key, "value"),
+      Err(NysmError::InvalidConfiguration(_))
+    ));
   }
 }

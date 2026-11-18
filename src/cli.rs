@@ -324,15 +324,26 @@ async fn delete(client: &dyn QuerySecrets, args: &Delete) -> Result<(), NysmErro
   Ok(())
 }
 
-fn strip_trailing_whitespace_from_block_scalars(content: &str) -> String {
-  if content.contains(": |") {
-    content
-      .lines()
-      .map(|line| line.trim_end())
-      .collect::<Vec<_>>()
-      .join("\n")
-  } else {
-    content.to_string()
+/// YAML parsing options that keep values typed the way nysm has always read
+/// them: YAML 1.2 booleans only, `0755` and `1_000` stay strings, last
+/// duplicate key wins, and errors carry no snippet of the (secret) input.
+fn yaml_parse_options() -> serde_saphyr::Options {
+  serde_saphyr::options! {
+    duplicate_keys: serde_saphyr::DuplicateKeyPolicy::LastWins,
+    leading_zero_numbers_as_strings: true,
+    underscored_numbers_as_strings: true,
+    strict_booleans: true,
+    non_finite_float_policy: serde_saphyr::options::NonFiniteFloatPolicy::PassThrough,
+    with_snippet: false,
+  }
+}
+
+/// YAML output options: lists indented under their key and long single-line
+/// strings kept on one line instead of folded.
+fn yaml_print_options() -> serde_saphyr::SerializerOptions {
+  serde_saphyr::ser_options! {
+    compact_list_indent: false,
+    folded_wrap_chars: usize::MAX,
   }
 }
 
@@ -348,7 +359,8 @@ fn reformat_data(
       match destination_format {
         DataFormat::Json => serde_json::to_string_pretty(&json_value)?,
         DataFormat::Yaml => {
-          let mut yaml = serde_yml::to_string(&json_value)?;
+          let mut yaml = serde_saphyr::to_string_with_options(&json_value, yaml_print_options())
+            .map_err(<serde_saphyr::Error as serde::de::Error>::custom)?;
 
           if !yaml.ends_with('\n') {
             yaml.push('\n');
@@ -361,12 +373,15 @@ fn reformat_data(
     }
     DataFormat::Yaml => match destination_format {
       DataFormat::Yaml => {
-        serde_yml::from_str::<serde_yml::Value>(content)?;
+        serde_saphyr::from_str_with_options::<serde::de::IgnoredAny>(
+          content,
+          yaml_parse_options(),
+        )?;
         String::from(content)
       }
       DataFormat::Json => {
-        let cleaned_content = strip_trailing_whitespace_from_block_scalars(content);
-        let yaml_value: serde_yml::Value = serde_yml::from_str(&cleaned_content)?;
+        let yaml_value: serde_json::Value =
+          serde_saphyr::from_str_with_options(content, yaml_parse_options())?;
         serde_json::to_string_pretty(&yaml_value)?
       }
       DataFormat::Text => String::from(content),
@@ -633,8 +648,64 @@ banana: true
 
       let result = reformat_data(yaml_string, &DataFormat::Yaml, &DataFormat::Json)?;
 
-      assert!(!result.contains("false \\n"));
-      assert!(result.contains("false\\n"));
+      assert!(result.contains("banana: false \\napple: true"));
+
+      Ok(())
+    }
+
+    #[test]
+    fn from_yaml_to_json_keeps_yaml_1_1_scalars_as_strings() -> TestResult {
+      let yaml_string = "a: yes\nb: off\nc: 0755\nd: 1_000\ne: true\nf: 42\n";
+      let expected = serde_json::to_string_pretty(&json!({
+        "a": "yes",
+        "b": "off",
+        "c": "0755",
+        "d": "1_000",
+        "e": true,
+        "f": 42,
+      }))?;
+
+      let result = reformat_data(yaml_string, &DataFormat::Yaml, &DataFormat::Json)?;
+
+      assert_eq!(expected, result);
+
+      Ok(())
+    }
+
+    #[test]
+    fn from_yaml_to_json_keeps_last_duplicate_key() -> TestResult {
+      let result = reformat_data("a: 1\na: 2\n", &DataFormat::Yaml, &DataFormat::Json)?;
+
+      assert_eq!(serde_json::to_string_pretty(&json!({"a": 2}))?, result);
+
+      Ok(())
+    }
+
+    #[test]
+    fn from_json_to_yaml_indents_lists_and_quotes_ambiguous_strings() -> TestResult {
+      let data = r#"{"list": [1, {"x": "yes"}], "pin": "0755"}"#;
+      let expected = "list:\n  - 1\n  - x: \"yes\"\npin: \"0755\"\n";
+
+      let result = reformat_data(data, &DataFormat::Json, &DataFormat::Yaml)?;
+
+      assert_eq!(expected, result);
+
+      Ok(())
+    }
+
+    #[test]
+    fn json_round_trips_through_yaml() -> TestResult {
+      let data = serde_json::to_string_pretty(&json!({
+        "pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+        "crlf": "a\r\nb",
+        "token": "x".repeat(120),
+        "flags": ["yes", "no", "on", "off", "null", "~", ""],
+      }))?;
+
+      let yaml = reformat_data(&data, &DataFormat::Json, &DataFormat::Yaml)?;
+      let result = reformat_data(&yaml, &DataFormat::Yaml, &DataFormat::Json)?;
+
+      assert_eq!(data, result);
 
       Ok(())
     }
@@ -670,10 +741,40 @@ banana: true
     let result = reformat_data(&problematic_yaml, &DataFormat::Yaml, &DataFormat::Json)?;
 
     assert!(result.contains("application.yml"));
-    assert!(result.contains("banana: false"));
-    assert!(!result.contains("false \\n"));
+    assert!(result.contains("banana: false \\n"));
+
+    let reprinted = reformat_data(&result, &DataFormat::Json, &DataFormat::Yaml)?;
+
+    assert!(reprinted.contains("application.yml: |-\n  banana: false \n"));
 
     Ok(())
+  }
+
+  #[tokio::test]
+  async fn noop_yaml_edit_keeps_whitespace_in_multiline_values() {
+    async_with_env_vars(
+      vec![("EDITOR", None)],
+      AssertUnwindSafe(async {
+        let secrets = [
+          json!({"token": "a \nb"}),
+          json!({"token": "a\t\nb"}),
+          json!({"token": "a\nb "}),
+          json!({"token": "a\nb \n"}),
+          json!({"cert": "l1\nl2\n", "other": "x", "token": "a \nb"}),
+          json!({"cert": "l1\nl2\n", "zz_last": "x\n\n\n"}),
+        ];
+
+        for secret in secrets {
+          let contents = serde_json::to_string_pretty(&secret).unwrap();
+          let dir = TempDir::new().unwrap();
+
+          let saved = launch_editor(contents, dir.path(), &DataFormat::Json, &DataFormat::Yaml);
+
+          assert_eq!(saved.unwrap(), None, "no-op edit changed {secret}");
+        }
+      }),
+    )
+    .await;
   }
 
   mod argument_parsing {
@@ -779,14 +880,7 @@ banana: true
 
     #[test]
     fn aws_sets_create_subcommand_with_description() -> TestResult {
-      let args = vec![
-        "nysm",
-        "aws",
-        "create",
-        "new-secret",
-        "-d",
-        "Test secret",
-      ];
+      let args = vec!["nysm", "aws", "create", "new-secret", "-d", "Test secret"];
       let arg_parser = ArgumentParser::try_parse_from(args)?;
 
       match &arg_parser.provider {
@@ -974,6 +1068,9 @@ banana: true
     };
     use async_trait::async_trait;
 
+    type SecretHook = Box<dyn Fn(&str) + Send + Sync>;
+
+    #[derive(Default)]
     pub struct TestClient {
       fails_on_list_secrets: bool,
       fails_on_get_secret_value: bool,
@@ -981,25 +1078,9 @@ banana: true
       fails_on_create_secret: bool,
       fails_on_delete_secret: bool,
       is_write_only: bool,
-      on_create_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
-      on_update_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
-      on_delete_secret: Option<Box<dyn Fn(&str) + Send + Sync>>,
-    }
-
-    impl Default for TestClient {
-      fn default() -> Self {
-        Self {
-          fails_on_list_secrets: false,
-          fails_on_get_secret_value: false,
-          fails_on_update_secret_value: false,
-          fails_on_create_secret: false,
-          fails_on_delete_secret: false,
-          is_write_only: false,
-          on_create_secret: None,
-          on_update_secret: None,
-          on_delete_secret: None,
-        }
-      }
+      on_create_secret: Option<SecretHook>,
+      on_update_secret: Option<SecretHook>,
+      on_delete_secret: Option<SecretHook>,
     }
 
     #[async_trait]
@@ -1279,7 +1360,7 @@ banana: true
             assert_eq!(
               result,
               Err(NysmError::SerdeYaml(
-                serde_yml::from_str::<String>("{").unwrap_err()
+                serde_saphyr::from_str::<String>("{").unwrap_err()
               ))
             );
           }),

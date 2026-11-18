@@ -1,27 +1,72 @@
-name: Tests
+name: CI
 
+# One run per pull request (pull_request event) and one per merge to master
+# (push event). Feature-branch pushes do not trigger a second run.
 on:
+  pull_request:
   push:
+    branches:
+      - master
 
-env: 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build_and_test:
+  lint:
+    name: Rustfmt & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          components: rustfmt, clippy
+      - name: Rustfmt
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      # Builds the crate as published; some cargo warnings only appear there.
+      - name: Verify package
+        run: cargo package --locked
+
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read rust-version
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - name: Check
+        run: cargo check --all-targets --all-features --locked
+
+  test:
+    # Keep this repo's existing job name: branch rulesets may require it.
     name: Nysm Tests and Coverage
     runs-on: ubuntu-latest
     container:
-      image: xd009642/tarpaulin:develop-nightly
+      image: xd009642/tarpaulin:0.37.6-nightly@sha256:0467f9ce2c089549f11abef4183d8fbd126ea8e793186de660d43ec3b6feda26
       options: --security-opt seccomp=unconfined
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: 1.88.0
+          persist-credentials: false
       - name: Generate code coverage
-        run: |
-          cargo tarpaulin --engine llvm
-      - name: Coveralls GitHub Action
-        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6
+        run: cargo tarpaulin --engine llvm --all-features
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           github-token: ${{ github.token }}

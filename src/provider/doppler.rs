@@ -92,10 +92,9 @@ impl DopplerClient {
       ));
     }
 
-    let client = Client::builder()
-      .use_rustls_tls()
-      .build()
-      .map_err(|e| NysmError::InvalidConfiguration(format!("Failed to create HTTP client: {}", e)))?;
+    let client = Client::builder().use_rustls_tls().build().map_err(|e| {
+      NysmError::InvalidConfiguration(format!("Failed to create HTTP client: {}", e))
+    })?;
 
     Ok(Self {
       client,
@@ -106,7 +105,7 @@ impl DopplerClient {
   }
 
   fn get_base_url(&self) -> String {
-    format!("https://api.doppler.com/v3/configs/config")
+    "https://api.doppler.com/v3/configs/config".to_string()
   }
 
   fn get_auth_header(&self) -> (&str, String) {
@@ -122,7 +121,7 @@ impl DopplerClient {
 impl QuerySecrets for DopplerClient {
   async fn secrets_list(&self) -> Result<ListSecretsResult, NysmError> {
     let url = format!("{}/secrets", self.get_base_url());
-    
+
     let response = self
       .client
       .get(&url)
@@ -141,11 +140,12 @@ impl QuerySecrets for DopplerClient {
 
         let entries = data
           .secrets
-          .into_iter()
-          .map(|(name, _)| Secret {
+          .into_keys()
+          .map(|name| Secret {
             name: Some(name.clone()),
-            uri: Some(format!("{}/{}?project={}&config={}", 
-              self.get_base_url(), 
+            uri: Some(format!(
+              "{}/{}?project={}&config={}",
+              self.get_base_url(),
               name,
               self.project,
               self.config
@@ -171,7 +171,7 @@ impl QuerySecrets for DopplerClient {
 
   async fn secret_value(&self, secret_id: String) -> Result<GetSecretValueResult, NysmError> {
     let url = format!("{}/secret", self.get_base_url());
-    
+
     let mut params = self.get_project_params();
     params.push(("name", &secret_id));
 
@@ -186,10 +186,9 @@ impl QuerySecrets for DopplerClient {
 
     match response.status() {
       StatusCode::OK => {
-        let data: DopplerSecretResponse = response
-          .json()
-          .await
-          .map_err(|e| NysmError::GetSecretValueFailed(format!("Failed to parse response: {}", e)))?;
+        let data: DopplerSecretResponse = response.json().await.map_err(|e| {
+          NysmError::GetSecretValueFailed(format!("Failed to parse response: {}", e))
+        })?;
 
         Ok(GetSecretValueResult {
           secret: data.value.raw,
@@ -218,7 +217,7 @@ impl QuerySecrets for DopplerClient {
     secret_value: String,
   ) -> Result<UpdateSecretValueResult, NysmError> {
     let url = format!("{}/secrets", self.get_base_url());
-    
+
     let mut secrets = std::collections::HashMap::new();
     secrets.insert(secret_id.clone(), secret_value);
 
@@ -236,18 +235,17 @@ impl QuerySecrets for DopplerClient {
       .map_err(|e| NysmError::UpdateSecretFailed(format!("Doppler API request failed: {}", e)))?;
 
     match response.status() {
-      StatusCode::OK => {
-        Ok(UpdateSecretValueResult {
-          name: Some(secret_id.clone()),
-          uri: Some(format!("{}/{}?project={}&config={}", 
-            self.get_base_url(), 
-            secret_id,
-            self.project,
-            self.config
-          )),
-          version_id: None,
-        })
-      }
+      StatusCode::OK => Ok(UpdateSecretValueResult {
+        name: Some(secret_id.clone()),
+        uri: Some(format!(
+          "{}/{}?project={}&config={}",
+          self.get_base_url(),
+          secret_id,
+          self.project,
+          self.config
+        )),
+        version_id: None,
+      }),
       StatusCode::UNAUTHORIZED => Err(NysmError::AuthenticationFailed(
         "Invalid Doppler token".to_string(),
       )),
@@ -267,7 +265,9 @@ impl QuerySecrets for DopplerClient {
     secret_value: String,
     _description: Option<String>,
   ) -> Result<CreateSecretResult, NysmError> {
-    let result = self.update_secret_value(secret_id.clone(), secret_value).await?;
+    let result = self
+      .update_secret_value(secret_id.clone(), secret_value)
+      .await?;
 
     Ok(CreateSecretResult {
       name: result.name,
@@ -278,7 +278,7 @@ impl QuerySecrets for DopplerClient {
 
   async fn delete_secret(&self, secret_id: String) -> Result<DeleteSecretResult, NysmError> {
     let url = format!("{}/secret", self.get_base_url());
-    
+
     let response = self
       .client
       .delete(&url)
@@ -290,13 +290,11 @@ impl QuerySecrets for DopplerClient {
       .map_err(|e| NysmError::DeleteSecretFailed(format!("Doppler API request failed: {}", e)))?;
 
     match response.status() {
-      StatusCode::OK | StatusCode::NO_CONTENT => {
-        Ok(DeleteSecretResult {
-          name: Some(secret_id),
-          uri: None,
-          deletion_date: None,
-        })
-      }
+      StatusCode::OK | StatusCode::NO_CONTENT => Ok(DeleteSecretResult {
+        name: Some(secret_id),
+        uri: None,
+        deletion_date: None,
+      }),
       StatusCode::UNAUTHORIZED => Err(NysmError::AuthenticationFailed(
         "Invalid Doppler token".to_string(),
       )),
