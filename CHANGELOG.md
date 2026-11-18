@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/endoze/nysm/compare/v0.2.4...v0.3.0) - 2026-11-18
+
+### Fixed
+
+- [**breaking**] maintenance pass for dependencies, CI, and release tooling
+
+### Other
+
+- run release-plz release before release-pr
+
 ## [0.2.4] - 2026-11-16
 
 ### Miscellaneous Tasks
