@@ -11,6 +11,18 @@ documentation = "https://docs.rs/nysm"
 rust-version = "1.94.1"
 keywords = ["secrets", "aws", "cli", "secretsmanager", "security"]
 categories = ["command-line-utilities", "config", "authentication"]
+# Repo tooling isn't part of the crate; keeping it out means CI-only changes
+# don't count as package changes and trigger a release.
+exclude = [
+  ".github/",
+  ".coderabbit.yaml",
+  ".gitignore",
+  "deny.toml",
+  "dist-workspace.toml",
+  "release-plz.toml",
+  "rustfmt.toml",
+  "tarpaulin.toml",
+]
 
 [lib]
 name = "nysm"
