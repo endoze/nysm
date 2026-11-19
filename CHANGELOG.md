@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1](https://github.com/endoze/nysm/compare/v0.3.0...v0.3.1) - 2026-11-18
+
+### Other
+
+- exclude repo tooling from the published crate
+
 ## [0.3.0](https://github.com/endoze/nysm/compare/v0.2.4...v0.3.0) - 2026-11-18
 
 ### Fixed
